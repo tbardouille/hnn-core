@@ -28,7 +28,7 @@ hnn_core_root = op.join(op.dirname(hnn_core.__file__), '..')
 
 ###############################################################################
 # User-defined variables
-startingParameterFile = 'AlphaAndBeta_testScript.param'
+startingParameterFile = 'AlphaAndBeta_testScript_60secondSingleTrial.param'
 paramsOfInterest = ['input_prox_A_weight_L2Pyr_ampa', 
 	'input_prox_A_weight_L5Pyr_ampa',
 	'input_dist_A_weight_L2Pyr_ampa',
@@ -38,12 +38,12 @@ paramMax = 9.4e-5
 numberOfSteps = 10
 parameterScale = 'linear'
 
-dplDirName = 'pyr_ampa'
+dplDirName = 'pyr_ampa_60seconds'
 
 plotOK = True
 
 # Folder for storing dipole txt files
-outDir = '/Users/tbardouille/Documents/Work/Projects/Spectral Events/HNN/Data'
+outDir = './' #'/Users/tbardouille/Documents/Work/Projects/Spectral Events/HNN/Data'
 
 ###############################################################################
 # Functions
