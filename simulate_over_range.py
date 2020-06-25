@@ -25,6 +25,9 @@ from hnn_core import simulate_dipole, read_params, read_dipole, Network
 # Directories and Neuron
 hnn_core_root = op.join(op.dirname(hnn_core.__file__), '..')
 
+import pandas as pd
+import support_functions.spectralevents_functions as tse
+import scipy.signal as ss
 
 ###############################################################################
 # User-defined variables
@@ -40,10 +43,17 @@ parameterScale = 'linear'
 
 dplDirName = 'pyr_ampa_60seconds'
 
-plotOK = True
+plotOK = False
 
 # Folder for storing dipole txt files
 outDir = './' #'/Users/tbardouille/Documents/Work/Projects/Spectral Events/HNN/Data'
+
+# Downsample factor prior to TFR analysis
+downsamp = 20   # Go from 40,000Hz to 2,000Hz
+
+# Frequency range defining events of interest
+betaMin = 15
+betaMax = 30
 
 ###############################################################################
 # Functions
@@ -116,6 +126,8 @@ def get_smoothed_ranges(parameterValues, dpls):
 ###############################################################################
 # Main Program
 
+dplPath = op.join(outDir, dplDirName)
+
 # Read the default parameter file 
 params_fname = op.join(hnn_core_root, 'param', startingParameterFile)
 params = read_params(params_fname)
@@ -126,23 +138,15 @@ if parameterScale == 'linear':
 if parameterScale == 'log':
 	parameterValues = np.logspace(paramMin, paramMax, numberOfSteps, endpoint=True)
 
-'''
-# Run simulations consecutively
-# Loop over parameter range and generate dipole simulations
-dpls = []
-for p in parameterValues:
-	dpls.append(adjust_param_and_simulate_dipole(params, paramsOfInterest, p, outDir))
-'''
-
-# Run simulations in parallel
 # Make the folder for the dpl files
-dplPath = op.join(outDir, dplDirName)
 if not os.path.exists(dplPath):
     os.makedirs(dplPath)
 else:
 	# Remove all the subdirectories first
     shutil.rmtree(dplPath)           
     os.makedirs(dplPath)
+
+# Run simulations in parallel
 # Set up the parallel task pool for dipole simulations
 count = int(np.round(mp.cpu_count()*1/2))
 print(count)
@@ -156,5 +160,82 @@ dpls = read_dipoles_over_range(parameterValues, plotOK)
 # Read smoother dipole amplitude ranges for parameters
 ranges = get_smoothed_ranges(parameterValues[0:-1], dpls[0:-1])
 
+# Get and example dipole timecourse and times for further analysis
+#   Note dropping first two samples due to large offset
+dplData = dpls[3].dpl['agg'][2::]
+dplTimes = dpls[3].t[2::]
 
+# Downsample the data for speed (there doesn't seem to be content above 2000 Hz sample rate anyway)
+dplData_resamp = dplData[::downsamp]
+dplTimes_resamp = dplTimes[::downsamp]
+
+# Make the TFR for transient spectral event analysis 
+fmin = 1
+fmax = 60
+fstep =1
+fVec = np.arange(fmin, fmax+1, fstep)
+width = 10
+Fs = 1/params['dt']*1000
+newFs = int(np.round(Fs/downsamp))
+TFR, tVec, fVec = tse.spectralevents_ts2tfr(np.expand_dims(dplData_resamp,1), fVec, newFs, width)
+
+# Plot the TFR
+if plotOK:
+    plt.pcolor(tVec, fVec, np.squeeze(TFR), cmap='jet')
+    plt.xlabel('Time [s]')
+    plt.ylabel('Frequency [Hz]')
+    cbar = plt.colorbar()
+    cbar.set_label('Signal Power [nAm^2 ?]', rotation=270)
+    plt.show()
+
+# Find transient spectral events based on TFR
+findMethod = 1
+thrFOM = 6
+classLabels = [1]
+neighbourhood_size = (4,160)
+threshold = 0.00
+spectralEvents = tse.spectralevents_find (findMethod, thrFOM, tVec,
+            fVec, TFR, classLabels, neighbourhood_size, threshold, newFs)
+df = pd.DataFrame(spectralEvents)
+
+# Get beta range events only
+df1 = df[df['Peak Frequency']>=betaMin]
+df2 = df1[df1['Peak Frequency']<=betaMax]
+betaEvents = df2[df2['Outlier Event']]
+
+# Find time for each event of trough closest to peak time
+epochLength = 2000
+epochTime = epochLength/newFs
+epochTimes = np.arange(epochLength)/newFs-(epochTime/2)
+
+betaTimes = betaEvents['Peak Time'].tolist()
+troughTimes = []
+for bt in betaTimes:
+    peakIndex = int(bt*newFs)
+    print(peakIndex)
+    firstIndex = int(peakIndex-epochLength/2)
+    lastIndex = int(peakIndex+epochLength/2)
+    if firstIndex >= 0:
+        if lastIndex < dplData_resamp.shape[0]:
+            thisData = dplData_resamp[firstIndex:lastIndex]
+            localMinIndex = ss.argrelextrema(-thisData, np.greater)[0]-epochLength/2
+            localMinClosestToZero = min(localMinIndex, key=lambda x:abs(x))
+            troughTimes.append(peakIndex + localMinClosestToZero)
+
+# Extract time course for each event aligned to trough closest to peak time
+epochs = []
+for tt in troughTimes:
+    firstIndex = int(tt-epochLength/2)
+    lastIndex = int(tt+epochLength/2)
+    if firstIndex >= 0:
+        if lastIndex < dplData_resamp.shape[0]:
+            thisData = dplData_resamp[firstIndex:lastIndex]
+            epochs.append(thisData)
+epochs = np.asarray(epochs)
+
+# Burst Triggered Average
+betaBurstAvg = np.mean(epochs, 0)
+if plotOK:
+    plt.plot(epochTimes, betaBurstAvg)
+    plt.show()
 
